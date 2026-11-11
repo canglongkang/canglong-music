@@ -7,6 +7,11 @@ name: build-engine
 
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: "强制重建（删除已有 Release 重发）"
+        type: boolean
+        default: false
   schedule:
     - cron: "0 21 * * *"        # 每天一次（UTC 21:00 = 北京 05:00）
   push:
@@ -31,15 +36,27 @@ jobs:
           echo "上游最新 release: $TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: 该版本已构建过则跳过
+      - name: 该版本已构建过则跳过（push 触发或勾选 force 时强制重建）
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ github.event_name == 'push' && 'true' || inputs.force || 'false' }}
         run: |
-          if gh release view "${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
-            echo "已存在 $TAG 的 Release，跳过"; echo "skip=true" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" != "true" ] && gh release view "${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "已存在 ${{ steps.ver.outputs.tag }} 的 Release，跳过"; echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 强制重建时删除旧 Release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "删除旧 Release $TAG（强制重建）"
+            gh release delete "$TAG" --yes --cleanup-tag || true
           fi
 
       - name: 拉上游源码（优先 release tag，缺 tag 回落 main）

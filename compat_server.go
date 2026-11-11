@@ -29,11 +29,26 @@ import (
 
 	"github.com/guohuiyuan/go-music-dl/core"
 	"github.com/guohuiyuan/music-lib/model"
+	"github.com/spf13/cobra"
 )
 
 // 安卓没有 /etc/resolv.conf，Go 纯解析器会回落 127.0.0.1 导致全部 DNS 失败
 // （症状：引擎源搜索 0 条且瞬间返回）。这里直接把解析请求拨到公共 DNS。
 var compatDNSServers = []string{"223.5.5.5:53", "119.29.29.29:53"}
+
+// 安卓引擎专用：接管上游 web 子命令的默认行为。
+// 上游的 web 模式跑完整 SPA（internal/web 的聚合搜索页），而苍龙 fetchsong
+// 的契约是 compat 层的 song-card 页（data-id/data-source/data-extra 属性）。
+// 如果不覆写，fetchsong 拉起的引擎返回 SPA HTML，parse_cards 解析出 0 条，
+// 症状就是「除 B 站外全搜不到」（B 站是 Python 直连实现，不走引擎）。
+// 上游要真想跑 SPA 用 --desktop（桌面内嵌模式）仍走原逻辑。
+func init() {
+	if webCmd != nil {
+		webCmd.Run = func(cmd *cobra.Command, args []string) {
+			_ = runCompatServer(port)
+		}
+	}
+}
 
 func initCompatResolver() {
 	net.DefaultResolver = &net.Resolver{
