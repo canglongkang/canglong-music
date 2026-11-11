@@ -17,6 +17,12 @@ on:
   push:
     branches: [main]
     paths: ['.github/workflows/build-engine.yml']   # CI 脚本变更时也触发（含首次推送）
+  # B3 上游发版即时触发：上游（或任何持有 token 的一方）发 release 后调
+  #   POST /repos/canglongkang/canglong-music/dispatches
+  #   {"event_type":"upstream-release"}
+  # 几分钟内即出苍龙版引擎；版本没变时下面的跳过逻辑自动兜底，重复调用无害。
+  repository_dispatch:
+    types: [upstream-release]
 
 permissions:
   contents: write
@@ -71,14 +77,20 @@ jobs:
         with:
           go-version: '1.27.3'
 
-      - name: 注入 compat_server 并编译（GOOS=android arm64）
+      - name: 注入 compat_server 并编译（GOOS=android arm64 + amd64）
         if: steps.check.outputs.skip != 'true'
         run: |
           cp compat_server.go upstream/cmd/music-dl/
           cd upstream
+          # arm64：真机用（APK 内 lib/arm64-v8a/libmusdl.so）
           CGO_ENABLED=0 GOOS=android GOARCH=arm64 \
             go build -trimpath -ldflags="-w -s" -o ../libmusdl_arm64-v8a.so ./cmd/music-dl
           file ../libmusdl_arm64-v8a.so
+          # B2 amd64/x86_64：MuMu 等模拟器场景（x86+Houdini 转译 arm64 引擎搜索会崩）；
+          # 真机不受影响。先出资产供模拟器侧载/后续 x86 APK 变体使用。
+          CGO_ENABLED=0 GOOS=android GOARCH=amd64 \
+            go build -trimpath -ldflags="-w -s" -o ../libmusdl_x86_64.so ./cmd/music-dl
+          file ../libmusdl_x86_64.so
 
       - name: 生成 manifest.json
         if: steps.check.outputs.skip != 'true'
@@ -86,6 +98,8 @@ jobs:
           TAG="${{ steps.ver.outputs.tag }}"
           SHA=$(sha256sum libmusdl_arm64-v8a.so | awk '{print $1}')
           SIZE=$(stat -c%s libmusdl_arm64-v8a.so)
+          SHA64=$(sha256sum libmusdl_x86_64.so | awk '{print $1}')
+          SIZE64=$(stat -c%s libmusdl_x86_64.so)
           {
             echo '{'
             echo "  \"version\": \"${TAG#v}\","
@@ -93,6 +107,9 @@ jobs:
             echo "  \"asset\": \"libmusdl_arm64-v8a.so\","
             echo "  \"sha256\": \"$SHA\","
             echo "  \"size\": $SIZE,"
+            echo "  \"asset_x86_64\": \"libmusdl_x86_64.so\","
+            echo "  \"sha256_x86_64\": \"$SHA64\","
+            echo "  \"size_x86_64\": $SIZE64,"
             echo "  \"built_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
             echo '}'
           } > manifest.json
@@ -104,9 +121,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.ver.outputs.tag }}"
-          gh release create "$TAG" libmusdl_arm64-v8a.so manifest.json \
-            --title "引擎 $TAG（苍龙构建 GOOS=android arm64）" \
-            --notes "上游 go-music-dl $TAG + compat_server 兼容层。GOOS=android（安卓系统 CA + 公共 DNS）。sha256 见 manifest.json。"
+          gh release create "$TAG" libmusdl_arm64-v8a.so libmusdl_x86_64.so manifest.json \
+            --title "引擎 $TAG（苍龙构建 GOOS=android arm64+amd64）" \
+            --notes "上游 go-music-dl $TAG + compat_server 兼容层。GOOS=android（安卓系统 CA + 公共 DNS）。arm64=真机，x86_64=模拟器（侧载用）。sha256 见 manifest.json。"
 
       # ---- Gitee 同步（Gitee 公开仓库审核通过后：取消注释并配 secret GITEE_TOKEN）----
       # - name: 同步附件到 Gitee Release（国内主下载源）
