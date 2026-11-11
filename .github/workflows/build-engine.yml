@@ -77,19 +77,36 @@ jobs:
         with:
           go-version: '1.27.3'
 
+      # B2：android/amd64 无纯 Go 内链（须 cgo 外链），需要 NDK clang。
+      # runner 若预装 NDK 直接用；没有就 sdkmanager 装。
+      - name: 准备 NDK（amd64 cgo 编译用）
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$NDK_DIR" ]; then
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" >/dev/null 2>&1 \
+              || yes | "$ANDROID_HOME/tools/bin/sdkmanager" "ndk;27.2.12479018" >/dev/null 2>&1
+            NDK_DIR=$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)
+          fi
+          echo "NDK 目录: $NDK_DIR"
+          test -n "$NDK_DIR" && test -d "$NDK_DIR"
+          echo "NDKROOT=$NDK_DIR" >> "$GITHUB_ENV"
+
       - name: 注入 compat_server 并编译（GOOS=android arm64 + amd64）
         if: steps.check.outputs.skip != 'true'
         run: |
           cp compat_server.go upstream/cmd/music-dl/
           cd upstream
-          # arm64：真机用（APK 内 lib/arm64-v8a/libmusdl.so）
+          # arm64：真机用（APK 内 lib/arm64-v8a/libmusdl.so），纯 Go 内链即可
           CGO_ENABLED=0 GOOS=android GOARCH=arm64 \
             go build -trimpath -ldflags="-w -s" -o ../libmusdl_arm64-v8a.so ./cmd/music-dl
           file ../libmusdl_arm64-v8a.so
-          # B2 amd64/x86_64：MuMu 等模拟器场景（x86+Houdini 转译 arm64 引擎搜索会崩）；
-          # 真机不受影响。先出资产供模拟器侧载/后续 x86 APK 变体使用。
-          CGO_ENABLED=0 GOOS=android GOARCH=amd64 \
-            go build -trimpath -ldflags="-w -s" -o ../libmusdl_x86_64.so ./cmd/music-dl
+          # B2 amd64/x86_64：MuMu 等模拟器场景（x86+Houdini 转译 arm64 引擎搜索会崩）。
+          # android/amd64 必须 cgo 外链（NDK clang），产物为 PIE。
+          CC="$NDKROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android29-clang"
+          test -f "$CC"
+          CGO_ENABLED=1 GOOS=android GOARCH=amd64 CC="$CC" \
+            go build -trimpath -buildmode=pie -ldflags="-w -s" -o ../libmusdl_x86_64.so ./cmd/music-dl
           file ../libmusdl_x86_64.so
 
       - name: 生成 manifest.json
