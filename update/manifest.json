@@ -1,7 +1,7 @@
-{
-  "version": "0.7.14",
-  "versionCode": 21,
-  "notes": "内置 GitHub 默认更新源，应用可自动检查整包更新",
-  "url": "https://gh-proxy.com/https://github.com/canglongkang/canglong-music/releases/download/app-v0.7.14/canglong-0.7.14.apk",
-  "size": 55154502
+{  
+"version": "0.7.16",  
+"versionCode": 23,  
+"notes": "修全新安装误报引擎新版、应用发布顶掉引擎检查",  
+"url": "https://gh-proxy.com/https://github.com/canglongkang/canglong-music/releases/download/app-v0.7.16/canglong-0.7.16.apk",  
+"size": 55155349
 }
