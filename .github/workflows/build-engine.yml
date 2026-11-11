@@ -1,0 +1,110 @@
+name: build-engine
+
+# 苍龙音乐下载引擎自动构建：
+#   上游 guohuiyuan/go-music-dl 发新版 → 本 workflow 自动用 GOOS=android
+#   交叉编译含 compat_server 兼容层的 libmusdl_arm64-v8a.so → 发 GitHub Release。
+# 注意：必须在 GOOS=android 下编译（GOOS=linux 在安卓上 x509 全挂，历史踩坑）。
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * *"        # 每天一次（UTC 21:00 = 北京 05:00）
+  push:
+    branches: [main]
+    paths: ['.github/workflows/build-engine.yml']   # CI 脚本变更时也触发（含首次推送）
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 查上游最新版本
+        id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh api repos/guohuiyuan/go-music-dl/releases/latest --jq .tag_name)
+          echo "上游最新 release: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: 该版本已构建过则跳过
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.ver.outputs.tag }}" >/dev/null 2>&1; then
+            echo "已存在 $TAG 的 Release，跳过"; echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 拉上游源码（优先 release tag，缺 tag 回落 main）
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          git clone --depth 1 --branch "${{ steps.ver.outputs.tag }}" \
+            https://github.com/guohuiyuan/go-music-dl.git upstream \
+          || git clone --depth 1 https://github.com/guohuiyuan/go-music-dl.git upstream
+
+      - uses: actions/setup-go@v5
+        if: steps.check.outputs.skip != 'true'
+        with:
+          go-version: '1.27.3'
+
+      - name: 注入 compat_server 并编译（GOOS=android arm64）
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          cp compat_server.go upstream/cmd/music-dl/
+          cd upstream
+          CGO_ENABLED=0 GOOS=android GOARCH=arm64 \
+            go build -trimpath -ldflags="-w -s" -o ../libmusdl_arm64-v8a.so ./cmd/music-dl
+          file ../libmusdl_arm64-v8a.so
+
+      - name: 生成 manifest.json
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          SHA=$(sha256sum libmusdl_arm64-v8a.so | awk '{print $1}')
+          SIZE=$(stat -c%s libmusdl_arm64-v8a.so)
+          {
+            echo '{'
+            echo "  \"version\": \"${TAG#v}\","
+            echo "  \"tag\": \"$TAG\","
+            echo "  \"asset\": \"libmusdl_arm64-v8a.so\","
+            echo "  \"sha256\": \"$SHA\","
+            echo "  \"size\": $SIZE,"
+            echo "  \"built_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+            echo '}'
+          } > manifest.json
+          cat manifest.json
+
+      - name: 发布 GitHub Release
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          gh release create "$TAG" libmusdl_arm64-v8a.so manifest.json \
+            --title "引擎 $TAG（苍龙构建 GOOS=android arm64）" \
+            --notes "上游 go-music-dl $TAG + compat_server 兼容层。GOOS=android（安卓系统 CA + 公共 DNS）。sha256 见 manifest.json。"
+
+      # ---- Gitee 同步（Gitee 公开仓库审核通过后：取消注释并配 secret GITEE_TOKEN）----
+      # - name: 同步附件到 Gitee Release（国内主下载源）
+      #   if: steps.check.outputs.skip != 'true'
+      #   env:
+      #     GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+      #     TAG: ${{ steps.ver.outputs.tag }}
+      #   run: |
+      #     OWNER=canglongkang REPO=canglong-music
+      #     BODY=$(jq -n --arg t "$TAG" '{tag_name:$t,name:$t,target_commitish:"main",body:"同步自 GitHub Release"}')
+      #     RID=$(curl -sf -X POST -H "Authorization: token $GITEE_TOKEN" -H "Content-Type: application/json" \
+      #       -d "$BODY" "https://gitee.com/api/v5/repos/$OWNER/$REPO/releases" | jq -r '.id')
+      #     curl -sf -X POST -H "Authorization: token $GITEE_TOKEN" \
+      #       -F "attachment=@libmusdl_arm64-v8a.so" \
+      #       "https://gitee.com/api/v5/repos/$OWNER/$REPO/releases/$RID/attach-files"
+      #     curl -sf -X POST -H "Authorization: token $GITEE_TOKEN" \
+      #       -F "attachment=@manifest.json" \
+      #       "https://gitee.com/api/v5/repos/$OWNER/$REPO/releases/$RID/attach-files"
