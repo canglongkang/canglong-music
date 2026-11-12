@@ -1,7 +1,7 @@
-{  
-"version": "0.7.16",  
-"versionCode": 23,  
-"notes": "修全新安装误报引擎新版、应用发布顶掉引擎检查",  
-"url": "https://gh-proxy.com/https://github.com/canglongkang/canglong-music/releases/download/app-v0.7.16/canglong-0.7.16.apk",  
-"size": 55155349
+{
+  "version": "0.7.18",
+  "versionCode": 25,
+  "notes": "配色扩展与自定义调色板、一键补封面（写入音频文件）、无封面显示整歌名、长按编辑歌名歌手、歌名滚动、歌单下载限速防限流与补下跳过已有、下载目录修复",
+  "url": "https://gh-proxy.com/https://github.com/canglongkang/canglong-music/releases/download/app-v0.7.18/canglong-0.7.18.apk",
+  "size": 55166093
 }
